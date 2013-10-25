@@ -1,0 +1,915 @@
+#! /usr/bin/env perl
+
+# rsyncbackup <http://rsyncbackup.erlang.no/>
+# A backup utility for automating rsync backup from multiple sources to multiple destinations.
+#
+#  Copyright 2004 (C) Andreas Aakre Solberg <mac@solweb.no>
+# 
+#  This program is free software; you can redistribute it and/or modify  
+# it under the terms of the GNU General Public License as published by  
+# the Free Software Foundation; either version 2 of the License, or  
+# (at your option) any later version.
+# 
+#  This program is distributed in the hope that it will be useful,  but 
+# WITHOUT ANY WARRANTY; without even the implied warranty of  MERCHANTABILITY or 
+# FITNESS FOR A PARTICULAR PURPOSE. See the  GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License  along with this program; 
+# if not, write to 
+# the Free Software  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+
+#use warnings;
+use strict;
+use Getopt::Long;
+use Data::Dumper;
+use Digest::MD5 qw(md5_base64);
+
+my $Notes = ["StartBackup", "FinnishedBackup", "BackupFailed"];
+my $AppName = "rsyncbackup";
+my $GROWLINSTALLED = eval q{
+	use Mac::Growl;
+	Mac::Growl::RegisterNotifications($AppName,$Notes,$Notes);
+	1;
+};
+
+
+sub growlnotify() {
+	my ($serv,  $type, $header, $msg, $stick) = @_;
+	my ($ip, $port, $passwd) = split(/:/, $serv);
+	my $application = 'rsyncbackup';
+	my $types = 'StartBackup,FinnishedBackup,BackupFailed';
+	
+	eval {
+		use IO::Socket::INET;
+		my $client = new IO::Socket::INET->new(
+			PeerPort	=>	$port,
+			Proto		=>	'udp',
+			PeerAddr	=>	$ip
+		);
+		my $regmsg = 'register|' . $application . '|' . $types;
+		$client->send($regmsg . '$' . md5_base64($regmsg . $passwd) );
+		my $datagram;
+		if ($stick == 1) {
+			$datagram = "stick|$application|$type|$header|$msg";
+		} else {
+			$datagram = "notify|$application|$type|$header|$msg";
+		}
+		my $checksum .= '$' . md5_base64($datagram . $passwd);
+
+		$client->send($datagram . $checksum);
+		1;
+	}
+}
+
+# print "Support: " . $GROWLINSTALLED . "\n";
+
+Getopt::Long::Configure ("bundling"); 
+
+my %options = (
+	'help' => 1,
+	'verbosity' => 1
+);
+
+GetOptions(\%options,
+	'help|h',
+	'backupset|s=s',
+	'do_backup|b',
+	'cronlist|l',
+	'debugconf|d',
+	'email|e=s',
+	'stats|w',
+	'add_remote|r',
+	'no_file_log|n',
+	'version',
+	'growl',
+	'growlnotify=s',
+	'verbose|v+',
+	'quiet|q',
+	'backupconfigdir|x=s',
+	'status',
+	'dry-run',
+	'rsync-dry-run'
+);
+
+# print Dumper(\%options);
+
+
+my $PATH_DIR = $ENV{'HOME'} . "/backup/";
+if (defined $options{'backupconfigdir'}) {
+	$PATH_DIR = $options{'backupconfigdir'} . '/';
+}
+
+my $CONFIG_FILE 	= $PATH_DIR . "config.conf";
+my $BACKUPSET_FILE 	= $PATH_DIR . "backupset.conf";
+my $DESTS_FILE 		= $PATH_DIR . "destinations.conf";
+my $SOURCE_FILE 	= $PATH_DIR . "sources.conf";
+my $STATUS_FILE 	= $PATH_DIR . ".rsyncbackup.status";
+
+my $LOG_FOLDER = $PATH_DIR . "logs";	
+
+if (defined $options{'verbose'}) {
+	$options{'verbosity'} += $options{'verbose'};
+}
+if (defined $options{'quiet'}) {
+	$options{'verbosity'} = 0;
+}
+
+my $BACKUPSET = 'default';
+if (defined $options{'backupset'}) {
+	$BACKUPSET = $options{'backupset'};
+}
+
+my $EMAIL = undef;
+if (defined $options{'email'}) {
+	$EMAIL = $options{'email'};
+}
+
+
+
+OPTSWITCH : {
+
+	# Print version
+	exists($options{'version'}) && do {
+		$options{'help'} = 0;
+		&print_version($options{'verbosity'});
+		last;
+	};
+
+	# Add remote destination
+	exists($options{'add_remote'}) && do {
+		$options{'help'} = 0;
+		&add_remote($options{'verbosity'});
+		last;
+	};
+
+	# Debug configuration
+	exists($options{'debugconf'}) && do {
+		$options{'help'} = 0;
+		&debug_conf($options{'verbosity'});
+		last;
+	};
+
+	# Print statistics
+		exists($options{'stats'}) && do {
+		$options{'help'} = 0;
+		&statistics($options{'verbosity'});
+		last;
+	};
+
+	# Do backup
+	exists($options{'do_backup'}) && do {
+		$options{'help'} = 0;
+		&do_backup($options{'verbosity'});
+		last;
+	};
+	
+	# Show status
+	exists($options{'status'}) && do {
+		$options{'help'} = 0;
+		&read_status($STATUS_FILE);
+		last;
+	};
+
+	# Add remote destination
+	exists($options{'remote'}) && do {
+		$options{'help'} = 0;
+		&add_remote($options{'verbosity'});
+		last;
+	};
+		
+	exists($options{'cronlist'}) && do {
+		$options{'help'} = 0;
+		&list_cron;
+		last;
+	};	
+	
+	# Print help screen
+	( $options{'help'} == 1) && do {
+    print <<END
+Usage: rsyncbackup [options]
+
+[options] :
+	-b		Run backup
+	--do_backup
+	
+	-s file		Specify which backup source file to use
+	--source file
+	
+	-h		Print this help screen
+	--help
+	
+	-l		Print a list of all cronjobs for rsyncbackup
+	--cronlist
+	
+	-d		Debug configurations
+	--debugconf
+	
+	--status	Check wether rsyncbackup is currently running, and for how long.
+	
+	-e		Specify e-mail address to send errors, when errors occur
+	--email		Example: --email rsyncerror\@hotmail.com
+	
+	-w		Print statistics about disk usage for source and destination folders
+	--stats
+
+	-r		Add remote destination. This is a wizard for creating ssh-keys and distribute them.
+	--add_remote
+
+	--growl	Send notifications to Growl when starting and stopping backup. Will send a sticky
+			notification, if an error occur.
+	
+	--growlnotify	Send notifications to Remote Growl. http://erlang.no/remotegrowl
+			To send Growl notifications from a cronjob, you have to use --growlnotify and 
+			remotegrowl, rather than --growl.
+
+	--version	Prints version information
+
+	-n		Do not log to files, instead print to stdout
+	--no_file_log
+	
+	-x		Specify another backup config directory than ~/backup
+	--backupconfigdir	Example: --backupconfigdir /etc/rsyncbackup
+
+	--dry-run	Do not execute rsync command.
+	--rsync-dry-run	Do execute rsync command with --dry-run parameter.
+
+	-q 		Do not print output
+	--quiet
+	-v 		Print more output
+	--verbose
+	-vv		Print even more
+
+Read online documentation on: http://rsyncbackup.erlang.no/doc/
+END
+	}
+}
+
+
+
+
+
+#### Functions ###
+
+sub print_verb {
+	my ($verbosity, $verblevel, $string) = @_;
+	print $string if ($verbosity >= $verblevel);
+}
+
+sub trim {
+	my $temp = shift @_;
+	$temp =~ s/(^\s+|\s+$)//g;
+	return $temp;
+}
+
+sub datediff() {
+	my $diff = shift;
+	
+	my $secs = $diff % 60;
+	$diff = ($diff - $secs) / 60;
+	
+	my $mins = $diff % 60;
+	$diff = ($diff - $mins) / 60;	
+
+	my $hrs = $diff % 60;
+	$diff = ($diff - $hrs) / 60;
+	
+	my $days = $diff;
+	
+	my $ds = "";
+	
+	if ($days > 0) {
+		$ds = $days . " days and " . $hrs . " hours";
+	} elsif ($hrs > 0) {
+		$ds = $hrs . " hours and " . $mins . " minutes";
+	} else {
+		$ds = $mins . " minutes and " . $secs . " seconds";
+	}
+	return $ds;
+}
+
+sub list_cron {
+	system("crontab -l|grep rsyncbackup");
+}
+
+sub print_version {
+	my $verbosity = shift @_;
+	&print_verb($verbosity, 1, "rsyncbackup version 1.0 (13th December 2004)\n");
+	&print_verb($verbosity, 1, "GPL licenced, 2004 (c) Andreas Aakre Solberg\n");
+	&print_verb($verbosity, 1, "<http://rsyncbackup.erlang.no/>\n");
+}
+
+sub add_remote {
+	my $verbosity = shift @_;
+	
+	
+	KEYGEN : {
+		print "Enter the hostname of the remote computer (or IP-address): ";
+		my $rhost = <>; chomp($rhost); 
+				
+		print "Enter the backup directory on the remote computer [Backup]: ";
+		my $rdir = <>; chomp($rdir);
+		if (not $rdir) { $rdir =  'Backup'; }
+		 
+		print "Enter your username on the remote computer [" . $ENV{"USER"} . "]:";
+		my $ruser = <>; chomp($ruser);
+		if (not $ruser) { $ruser = $ENV{"USER"}; }
+
+		print "Enter an unique tag for the destination [$rhost]: ";		
+		my $rtag = <>; chomp($rtag);
+		if (not $rtag) { $rtag = $rhost; }
+		
+# 		print "$rhost - $ruser - $rdir - $rtag\n";
+# 		exit(1);
+		
+		if (-f $ENV{'HOME'} . '/.ssh/rsyncbackup') {
+			print "You already have a ssh key for use with rsyncbackup, so we skip \n" . 
+				"the key creation process.\n\n";
+		} else {
+		
+			print <<END
+*********************************************************************
+* SECURITY Warning                                                  *
+*                                                                   *
+* You are about to create a ssh-keyset without password for logging *
+*  in to a remote host. That means hackers who attack your computer *
+*  also can log in to the remote computer. Do clearify if this is   *
+*  OK with the local IT-administration of the remote host.          * 
+*********************************************************************
+
+END
+	;
+			print "Press enter to create the keys, or Control+C to quit\n"; <>;
+			system('ssh-keygen -t dsa -f ~/.ssh/rsyncbackup -N ""');
+			
+		}
+		
+		print "The public key will now be distributed to the remote computer. You will have to enter\n" .
+			"your ssh account password on the remote computer.\n";
+			
+		my $dcom = 'cat ~/.ssh/rsyncbackup.pub | ssh ' . 
+			$ruser . '@' . $rhost . " 'mkdir -p ~/.ssh " . $rdir . ' && ' . 
+			"cat - >> ~/.ssh/authorized_keys'";
+
+		#print "dcom: $dcom\n\n";
+		system($dcom);
+		
+		print "Public key is now distributed to the remote computer successfully\n\n";
+		
+		my $dline = $rtag . '|ssh[key=rsyncbackup,incremental=0]:' . $ruser . '@' . $rhost . ':' . $rdir . '|true|';
+
+		print "Writing $rtag to " . $DESTS_FILE . " :\n" . $dline . "\n\n";
+		
+		open DFILE, '>>', $DESTS_FILE;
+		print DFILE "\n#Destination added by remote host wizard\n" . $dline . "\n";
+		close DFILE;
+
+		print "Remotehost added successfully\n\n";
+	}
+	
+}
+
+sub statistics {
+
+	my $verbosity = shift @_;
+	
+	my %dests 	= read_dest($DESTS_FILE);
+	my %sources = read_source($SOURCE_FILE);
+
+	&print_verb($verbosity, 1, "--- Statistics ---\n");
+	&print_verb($verbosity, 1, scalar localtime);
+	&print_verb($verbosity, 1, "\n");
+	
+	my $command = ''; my $r;
+	foreach my $source (sort keys %sources) {
+		
+		if (defined $sources{$source}->{'condition'}) {
+			$r = &condition($verbosity, $sources{$source}->{'condition'});
+			unless ($r == 0) { next; }
+		}
+
+		print 'Source [' . $source . "]\n";
+		$command = 'du -sh "' . $sources{$source}->{'src'} .  '"';
+		system($command);
+	}
+
+	foreach my $dest (sort keys %dests) {
+
+		my $desten = $dests{$dest}->{'src'};
+		
+		
+		if (defined $dests{$dest}->{'condition'}) {
+			$r = condition($verbosity, $dests{$dest}->{'condition'});
+			unless ($r == 0) { next; }
+		}
+
+		if ($desten->{'type'} eq 'ssh') {
+			$command = 'ssh -p ' . $desten->{'options'}->{'sshport'} . ' -i ~/.ssh/' .
+				$desten->{'options'}->{'key'} . ' ' . $desten->{'user'} . '@' . $desten->{'host'} . 
+				' du -sh "' . $desten->{'path'} . '"';
+		} elsif($desten->{'type'} eq 'local') {
+			$command = 'du -sh "' . $desten->{'localpath'} . '"';
+		} else {
+			next;
+		}
+
+		print 'Destination [' . $dest . "]\n";
+#		print "command: $command \n";
+		system($command);
+
+	}
+
+}
+
+sub do_backup {
+
+	my $verbosity = shift @_;
+
+
+	die "Cannot find directory $PATH_DIR"
+		unless (-d $PATH_DIR);
+	
+	die "Cannot find directory $LOG_FOLDER"
+		unless (-d $LOG_FOLDER);
+	
+	die "Cannot find file $CONFIG_FILE"
+		unless (-f $CONFIG_FILE);
+	
+	die "Cannot find file $SOURCE_FILE"
+		unless (-f $SOURCE_FILE);
+
+	die "Cannot find file $DESTS_FILE"
+		unless (-f $DESTS_FILE);
+
+	die "Cannot find file $BACKUPSET_FILE"
+		unless (-f $BACKUPSET_FILE);
+	
+	my @copt 	= read_config($CONFIG_FILE);
+	my %dests 	= read_dest($DESTS_FILE);
+	my %sources = read_source($SOURCE_FILE);
+	my %backupsets = read_backupsets($BACKUPSET_FILE);
+
+#	print "Sources\n";
+#	print Dumper(\%sources);
+
+	die "Cannot find backupset $BACKUPSET"
+		unless (defined $backupsets{$BACKUPSET} );
+
+
+	if (defined $options{'growl'} && $GROWLINSTALLED) {
+		Mac::Growl::PostNotification($AppName,"StartBackup","Starting rsyncbackup","Running backupset\n$BACKUPSET", 0);
+	}
+	if (defined $options{'growlnotify'}) {
+		&growlnotify($options{'growlnotify'}, "StartBackup", "rsyncbackup STARTING", "Running backupset\n$BACKUPSET", 0);
+	}
+	
+	&write_status($STATUS_FILE,1, $BACKUPSET);
+
+	&print_verb($verbosity, 1, "--- BACKUP START ---\n");
+	&print_verb($verbosity, 1, scalar localtime);
+	&print_verb($verbosity, 1, "\nBackupset: $BACKUPSET\n\n");
+
+
+	my $tc = time();
+
+	foreach my $backupsetentry (@{$backupsets{$BACKUPSET}} ) {
+	
+		foreach my $source (@{$backupsetentry->{'sources'}}) {
+					
+			foreach my $dest (@{$backupsetentry->{'dests'}}) {
+			my @mergedopts = (@copt, $dests{$dest}->{'opts'}, $sources{$source}->{'opts'}, $backupsetentry->{'opts'});
+				my @mergedconditions = ($dests{$dest}->{'condition'}, $sources{$source}->{'condition'}, $backupsetentry->{'condition'});
+# 				print "DESTTING  [$dest] : ";
+# 				print Dumper($dests{$dest});
+				atom_backup($verbosity, $sources{$source}->{'src'}, $dests{$dest}->{'src'}, 
+					\@mergedopts, \@mergedconditions, $LOG_FOLDER, $source . '_to_' . $dest);
+
+	
+			}
+		}
+	}	
+	
+	$tc = time() - $tc;
+	&print_verb($verbosity, 1,  "All backups in this set took " . &datediff($tc) . " seconds\n\n");
+
+	&write_status($STATUS_FILE, 0, 'None');
+	if (defined $options{'growl'} && $GROWLINSTALLED) {
+		Mac::Growl::PostNotification($AppName,"FinnishedBackup","rsyncbackup is finnished","Finnished backupset\n$BACKUPSET", 0);
+	}
+	if (defined $options{'growlnotify'}) {
+		&growlnotify($options{'growlnotify'}, "FinnishedBackup", "rsyncbackup FINNISHED", "Finnished backupset\n$BACKUPSET", 0);
+	}
+
+	
+}
+
+sub debug_conf {
+
+	my $verbosity = shift @_;
+
+	die "Cannot find directory $PATH_DIR"
+		unless (-d $PATH_DIR);
+	print_verb($verbosity, 2, "PATH DIR:" . $PATH_DIR . "\n");
+	
+	die "Cannot find directory $LOG_FOLDER"
+		unless (-d $LOG_FOLDER);
+	print_verb($verbosity, 2, "LOG DIR:" . $LOG_FOLDER . "\n");
+	
+	die "Cannot find file $CONFIG_FILE"
+		unless (-f $CONFIG_FILE);
+	print_verb($verbosity, 2, "CONFIG_FILE:" . $CONFIG_FILE . "\n");
+	
+	die "Cannot find file $SOURCE_FILE"
+		unless (-f $SOURCE_FILE);
+	print_verb($verbosity, 2, "SOURCE FILE:" . $SOURCE_FILE . "\n");
+
+	die "Cannot find file $DESTS_FILE"
+		unless (-f $DESTS_FILE);
+	print_verb($verbosity, 2, "DESTS_FILE:" . $DESTS_FILE . "\n");
+
+	die "Cannot find file $BACKUPSET_FILE"
+		unless (-f $BACKUPSET_FILE);
+	print_verb($verbosity, 2, "BACKUPSET_FILE:" . $BACKUPSET_FILE . "\n");
+	
+	my @copt 	= read_config($CONFIG_FILE);
+	my %dests 	= read_dest($DESTS_FILE);
+	my %sources = read_source($SOURCE_FILE);
+	my %backupsets = read_backupsets($BACKUPSET_FILE);
+
+#	print "Sources\n";
+#	print Dumper(\%sources);
+
+	die "Cannot find backupset $BACKUPSET"
+		unless (defined $backupsets{$BACKUPSET} );
+	print_verb($verbosity, 1, "BACKUPSET:" . $BACKUPSET . "\n");
+
+	print_verb($verbosity, 2, "\n");
+
+	
+	my $counter = 0;
+	
+	
+	foreach my $backupsetentry (@{$backupsets{$BACKUPSET}} ) {
+	
+		foreach my $source (@{$backupsetentry->{'sources'}}) {
+					
+			foreach my $dest (@{$backupsetentry->{'dests'}}) {
+			
+				my @mergedopts = (@copt, $dests{$dest}->{'opts'}, $sources{$source}->{'opts'}, $backupsetentry->{'opts'});
+				my @mergedconditions = ($dests{$dest}->{'condition'}, $sources{$source}->{'condition'}, $backupsetentry->{'condition'});
+
+				&print_verb($verbosity, 1, "Backup set " . ++$counter . "	$source		to		$dest\n");
+
+				&print_verb($verbosity, 3, "Source          : " . $source . "\n");
+				&print_verb($verbosity, 2, "Source dir      : " . prettyprintdest($sources{$source}->{'src'}) . "\n");
+				&print_verb($verbosity, 3, "Source opts     : " . $sources{$source}->{'opts'} . "\n");
+				&print_verb($verbosity, 3, "Source cond     : " . $sources{$source}->{'condition'} . "\n");
+
+				&print_verb($verbosity, 3, "Destination     : " . $dest . "\n");	
+				&print_verb($verbosity, 2, "Destination dir : " . prettyprintdest($dests{$dest}->{'src'}) . "\n");
+				&print_verb($verbosity, 3, "Destination opts: " . $dests{$dest}->{'opts'} . "\n");
+				&print_verb($verbosity, 3, "Destination cond: " . $dests{$dest}->{'condition'} . "\n");
+
+				&print_verb($verbosity, 3, "Config options  : " . join(' ', @copt) . "\n");	
+				&print_verb($verbosity, 3, "Backupset opts  : " . $backupsetentry->{'condition'} . "\n");	
+
+				&print_verb($verbosity, 2, "All options     : " . join(' ', @mergedopts) . "\n");
+				&print_verb($verbosity, 2, "All conditions  : " . join(' ', @mergedconditions) . "\n");			
+
+				&print_verb($verbosity, 2, "\n");
+			} # end dest iteration
+
+		} # end source iteration
+
+	} # end backupsetentry iteration
+
+}
+
+
+
+
+sub write_status {
+	my ($file, $status, $tag) = @_;
+	open (FILE, '>', $file) || return "Error";
+
+	print FILE $status . ":" . time() . ":" . $tag . "\n";
+	close (FILE);
+}
+
+sub read_status {
+	my ($file) = @_;
+	open (FILE, '<', $file) || return "Error";
+	my $confline = <FILE>;
+	my @carray;
+	unless (@carray = split(/:/, $confline) ) {
+		return "Error";
+	}
+	close (FILE);
+	my $status = {
+		'status' => $carray[0],
+		'epoch' => $carray[1],
+		'tag' => $carray[2],
+		'secondstime' => time() - $carray[1],
+		'prettytime' => &datediff(time() - $carray[1])
+	};
+	if ($status->{'status'} == 1) {
+		print 'rsyncbackup is currently running backup set [' . trim($status->{'tag'}) . ']' . "\n" .
+			" and have been running for " . $status->{'prettytime'} . ".\n";
+	} else {
+		print "rsyncbackup is currently not running. Last run " .
+			$status->{'prettytime'} . " ago.\n";
+	}
+}
+
+
+
+
+## READ CONFIGURATION FILES ###
+
+sub read_dest {
+	my ($file) = @_;
+	my %dests;
+	open (FILE, '<', $file) || die "Error [$file]: $!\n";
+	while (my $confline = <FILE>) {
+		chop($confline);
+		next unless ($confline =~ m/^[^#][^\|]*\|[^\|]+\|[^\|]+\|[^\|]*$/);
+		my @carray = split(/\|/, $confline);
+		next unless ($carray[1] =~ m/^(ssh|local)(\[(.*?)\])?:((.*?)@(.*?):(.*)|(.*))$/);
+		my $src = { 'type' => $1, 'host' => $6, 'user' => $5, 'path' => $7 , 'localpath' => $8 };
+		if (defined $src->{'path'}) { 
+			$src->{'path'} .= ''; #/'; 
+		} else {
+			 $src->{'path'} = $src->{'localpath'}; # . '/';
+		}
+		my $src_params = {
+			'incremental' => 0, 
+			'key' => 'rsyncbackup',
+			'tag' => 'backup',
+			'sshport'	=> 22
+		};
+		if (defined $3) {
+			foreach my $p (split(',', $3)) {
+				next unless ($p =~ m/^(.*)=(.*)$/);
+				$src_params->{$1} = $2;
+			}
+		}
+		$src->{'options'} = $src_params;
+		$dests{$carray[0]} = { 
+			'key',	$carray[0],
+			'src', 	$src,
+			'condition', $carray[2],
+			'opts',	$carray[3] || ''
+		};
+	}
+	close (FILE);
+	#print Dumper(\%dests);
+	return %dests;
+}
+
+sub read_source {
+	my ($file) = @_;
+	my %sources;
+	open (FILE, '<', $file) || die "Error [$file]: $!\n";
+	while (my $confline = <FILE>) {
+		chop($confline);	
+		next unless ($confline =~ m/^[^#][^\|]*\|[^\|]+\|[^\|]+\|[^\|]*$/);
+		my @carray = split(/\|/, $confline);
+		my $src; my $src_params;
+		if ($carray[1] =~ m/^(ssh|local)(\[(.*?)\])?:((.*?)@(.*?):(.*)|(.*))$/) {
+			$src = { 'type' => $1, 'host' => $6, 'user' => $5, 'path' => $7 , 'localpath' => $8 };
+			if (defined $src->{'path'}) { 
+				$src->{'path'} .= ''; #'/'; 
+			} else {
+				$src->{'path'} = $src->{'localpath'} ; # . '/';
+			}
+			$src_params = { 
+				'key' => 'rsyncbackup',
+				'tag' => 'backup',
+				'sshport'	=> 22
+			};
+			if (defined $3) {
+				foreach my $p (split(',', $3)) {
+					next unless ($p =~ m/^(.*)=(.*)$/);
+					$src_params->{$1} = $2;
+				}
+			}
+			$src->{'options'} = $src_params;
+		} else {
+			# We add this section for backward compatibility for config files from before
+			# rsyncbackup 1.0.
+			$src = {
+				'type'			=> 'local',
+				'path' 			=> $carray[1],
+				'localpath'		=> $carray[1]
+			}
+		}
+		$sources{$carray[0]} = {
+			'key'			=>	$carray[0],
+			'src'			=> $src,
+			'condition'	=> $carray[2],
+			'opts'		=> $carray[3] || ''
+		};		
+	}
+	close (FILE);
+#	print Dumper(\%sources); exit;
+	return %sources;
+}
+
+sub read_backupsets {
+	my ($file) = @_;
+	my %backupsets;
+	open (FILE, '<', $file) || die "Error [$file]: $!\n";
+	
+	my $current_set = 'default';
+	$backupsets{$current_set} = [];
+	while (my $confline = <FILE>) {
+		chop($confline);
+		if ($confline =~ m/^\s*\[(.*?)\]\s*$/) {
+			$current_set = $1;
+			$backupsets{$current_set} = [];
+		} elsif ($confline =~ m/^[^#][^\|]*\|[^\|]+\|[^\|]+\|[^\|]*$/ ) {
+			my @carray = split(/\|/, $confline);
+			push @{$backupsets{$current_set}}, {
+				'sources', [split(/,/, $carray[0])],
+				'dests', [split(/,/, $carray[1])],
+				'condition', $carray[2],
+				'opts', $carray[3] || ''
+			};
+		}
+	}
+	close (FILE);
+#	print Dumper(\%backupsets);
+	return %backupsets;
+}
+
+sub read_config {
+	my ($file) = @_;
+	my @opts;
+	open (FILE, '<', $file)  || print "Error: $!\n" && return undef;
+	while (my $confline = <FILE>) {
+		chop($confline);
+		next unless ($confline =~ m/^[^#].+$/);
+		push @opts, $confline;
+	}
+	close (FILE);	
+	return @opts;
+}
+
+sub condition {
+	my ($verbosity, $condition) = @_;
+	#print "Condition: $condition \n";
+	system($condition); # . ' &2>&1 > /dev/null');
+	my $retval  = $? >> 8;
+	
+	#print "Run: $condition \nRetval = $retval \n\n";
+	
+	return $retval;
+}
+
+sub destcommand {
+	my ($verbosity, $dest, $rawcommand) = @_;
+	my $command ;
+	# Check destination type, and add propriate options for ssh handling.
+	if ($dest->{'type'} eq 'ssh') {
+		$command = 'ssh -p ' . $dest->{'options'}->{'sshport'} . 
+			' -i ~/.ssh/' . $dest->{'options'}->{'key'} . ' ' . 
+			$dest->{'user'} . '@' . $dest->{'host'} . 
+			" '" . $rawcommand . "'";
+	} elsif($dest->{'type'} eq 'local') {
+		$command = $rawcommand;
+	}
+	print_verb($verbosity, 2, "Command: \n$command \n");
+	system ($command);
+}
+
+sub prettyprintdest {
+	my $d = shift @_;
+
+	
+	if ($d->{'type'} eq 'ssh') {
+		return '[ssh] ' . $d->{'user'} . '@' . $d->{'host'} . ':' . 
+			$d->{'path'} . ' [key=' . $d->{'options'}->{'key'} . ',sshport=' . $d->{'options'}->{'sshport'} . ']';
+	} elsif ($d->{'type'} eq 'local') {
+		return '[local] ' . $d->{'localpath'};
+	} else {
+		return "[ERROR]: Unknown destination type, should be file or local!";
+	}
+}
+
+sub atom_backup {
+	my ($verbosity, $source, $dest, $opts, $conds, $log_folder, $tag) = @_;
+	my $logfile = $log_folder . '/last.' . $tag . '.log';
+	my $errfile = $log_folder . '/last.' . $tag . '.err.log';
+	
+	my $tc = time();
+	my $deststr = ''; my $sourcestr = '';
+	
+	# Check destination type, and add propriate options for ssh handling.
+	if ($dest->{'type'} eq 'ssh') {
+		$deststr = $dest->{'user'} . '@' . $dest->{'host'} . ':' . $dest->{'path'};
+		push @$opts, '--rsh="ssh -p ' . $dest->{'options'}->{'sshport'} . ' -l ' . $dest->{'user'} . ' -i '. $ENV{"HOME"} . '/.ssh/' . $dest->{'options'}->{'key'} . '"';
+	} elsif ($dest->{'type'} eq 'local') {
+		$deststr = $dest->{'localpath'};
+	} else {
+		warn ("Unknown sourcetype for destination " . $dest->{'type'} . ".\n"); return 1;
+	}
+	
+	# Check source type, and add propriate options for ssh handling.
+	if ($source->{'type'} eq 'ssh') {
+		$sourcestr = $source->{'user'} . '@' . $source->{'host'} . ':' . $source->{'path'};
+		push @$opts, '--rsh="ssh -p ' . $source->{'options'}->{'sshport'} . ' -l ' . $source->{'user'} . ' -i '. $ENV{"HOME"} . '/.ssh/' . $source->{'options'}->{'key'} . '"';
+	} elsif ($source->{'type'} eq 'local') {
+		$sourcestr = $source->{'localpath'};
+	} else {
+		warn ("Unknown sourcetype for source " . $source->{'type'} . ".\n"); return 1;
+	}
+	#print "Source string: $sourcestr\n";
+	#print "Destination string: $deststr\n"; exit;
+	
+	if ($source->{'type'} eq 'ssh' and $dest->{'type'} eq 'ssh') {
+		warn ("rsyncbackup cannot backup from a remote source to a remote destination.\n"); return 2;
+	}
+	
+	
+	&print_verb($verbosity, 1, "Doing backup <" . $tag . ">\n"); 
+	
+	$0 = "Backup [$tag] testing conditions";
+	# Checking if all conditions are met..
+	foreach my $c (@$conds) {
+		my $r = &condition($verbosity, $c);
+		if ($r == 0) {
+			print_verb($verbosity, 2, "Condition met\n");
+		} else {
+			print_verb($verbosity, 2, "Condition failed: $c\n");
+			print_verb($verbosity, 1, "Condition failed...\n");
+			return 1;
+		}
+	}
+	print_verb($verbosity, 1, "All conditions met...\n");
+
+	# Check if backup is incremental
+	if ($dest->{'options'}->{'incremental'} > 0) {
+		$0 = "Backup [$tag] incrementing";
+		# Removing the oldest backup increment
+		my $rc = 'test -d "' .  $dest->{'path'} . $dest->{'options'}->{'tag'} . '.' . $dest->{'options'}->{'incremental'} . 
+			'" && rm -rf "' . $dest->{'path'} . $dest->{'options'}->{'tag'} . '.' . $dest->{'options'}->{'incremental'} . '"';
+		destcommand($verbosity, $dest, $rc);
+		
+		# Shift increment register
+		for (my $i = $dest->{'options'}->{'incremental'}; $i > 0; $i--) {
+			$rc = 'test -d "' . $dest->{'path'} . $dest->{'options'}->{'tag'} . '.' . ($i - 1) . 
+				'" && mv "'  . $dest->{'path'} . $dest->{'options'}->{'tag'} . '.' . ($i - 1) . '" ' .
+				'"'  . $dest->{'path'} . $dest->{'options'}->{'tag'} . '.' . $i . '"';
+			destcommand($verbosity, $dest, $rc);
+		}
+		$rc = 'mkdir -p "' .  $dest->{'path'} . $dest->{'options'}->{'tag'} . '.0"';
+		destcommand($verbosity, $dest, $rc);
+		$rc = 'mkdir -p "' .  $dest->{'path'} . $dest->{'options'}->{'tag'} . '.1"';
+		destcommand($verbosity, $dest, $rc);
+		
+		$deststr .= $dest->{'options'}->{'tag'} . '.0/';
+		push @$opts, '--link-dest="../' . $dest->{'options'}->{'tag'} . '.1"';
+
+	}
+	
+
+	# Preparing backup...
+	my $command = 'rsync ' . join(' ', @$opts) . ' "' . $sourcestr . '" "' . $deststr . '" ';
+	unless (defined $options{'no_file_log'}) {
+		$command .= ' > ' . $logfile . ' 2> ' . $errfile;
+	}
+	
+	$0 = "Backup [$tag] running";
+
+	## EXECUTING BACKUP
+	&print_verb($verbosity, 2, "Command: $command\n");
+	system($command);
+	
+	## CHECK FOR ERRORS, and send email
+	if (-s $errfile > 0 ) {
+		if (defined $EMAIL) {
+			print_verb($verbosity, 1, "Errors occured. Sending e-mail to " . $EMAIL . "\n");
+			my $ecommand = 'cat ' . $errfile . ' | mail -s "rsyncbackup [error] ' . $tag . '" ' . $EMAIL;
+			system($ecommand);
+		} else {
+			print_verb($verbosity, 1, "Errors occured. E-mail is not configured, and will not be sent.\n");
+		}
+		if (defined $options{'growl'} && $GROWLINSTALLED) {
+			Mac::Growl::PostNotification($AppName,"BackupFailed","rsyncbackup failed","Backupset: $BACKUPSET\nSrc-Dst: $tag", 1);
+		}
+		if (defined $options{'growlnotify'}) {
+			&growlnotify($options{'growlnotify'}, "BackupFailed", "rsyncbackup FAILED", "Backupset: $BACKUPSET\nSrc-Dst: $tag", 1);
+		}
+	} else {
+		print_verb($verbosity, 2, "No errors occured.\n");
+	}
+		
+	
+	$tc = time() - $tc;
+	&print_verb($verbosity, 1,  "Backup of this source took " . &datediff($tc) . " seconds\n\n");
+	return 0;
+	
+}
+
+
+

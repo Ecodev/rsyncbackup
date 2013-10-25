@@ -1,0 +1,38 @@
+<html><head>
+      <meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+   <title>8.&nbsp;The log files</title><link rel="stylesheet" href="html.css" type="text/css"><meta name="generator" content="DocBook XSL Stylesheets V1.67.0"><link rel="start" href="index.html" title="rsyncbackup: User's Manual"><link rel="up" href="index.html" title="rsyncbackup: User's Manual"><link rel="prev" href="ar01s07.html" title="7.&nbsp;Scheduling backup"><link rel="next" href="ar01s09.html" title="9.&nbsp;Backup to remote destinations"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">8.&nbsp;The log files</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="ar01s07.html">Prev</a>&nbsp;</td><th width="60%" align="center">&nbsp;</th><td width="20%" align="right">&nbsp;<a accesskey="n" href="ar01s09.html">Next</a></td></tr></table><hr></div><div class="section" lang="en"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="d0e535"></a>8.&nbsp;The log files</h2></div></div></div><p>The log files are found in <code class="filename">~/backup/logs</code>. You can regulary check that all the .err.log files contains zero bytes to verify that nothing bad happend during backup. Here is an example of a log files directory: </p><pre class="screen">
+[andrs@Snow:daily]$ ls -la
+total 440
+drwxr-xr-x  35 andrs  andrs   1190 11 apr 10:58 .
+drwxr-xr-x  10 andrs  andrs    340 12 apr 11:01 ..
+-rw-r--r--   1 andrs  andrs      0 10 apr 15:37 last.bilder_to_hannemedia.err.log
+-rw-r--r--   1 andrs  andrs  36203 10 apr 18:33 last.bilder_to_hannemedia.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:37 last.documents_to_ipod.err.log
+-rw-r--r--   1 andrs  andrs   4838 12 apr 10:37 last.documents_to_ipod.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:37 last.documents_to_media-backup.err.log
+-rw-r--r--   1 andrs  andrs  15875 12 apr 10:39 last.documents_to_media-backup.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:39 last.home-backupconf_to_ipod.err.log
+-rw-r--r--   1 andrs  andrs   2101 12 apr 10:39 last.home-backupconf_to_ipod.log
+-rw-r--r--   1 andrs  andrs      0 10 apr 19:15 last.home-backupconf_to_media-backup.err.log
+-rw-r--r--   1 andrs  andrs   3459 12 apr 10:39 last.home-backupconf_to_media-backup.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:39 last.home-bin_to_ipod.err.log
+-rw-r--r--   1 andrs  andrs    475 12 apr 10:39 last.home-bin_to_ipod.log
+-rw-r--r--   1 andrs  andrs      0 10 apr 19:16 last.home-bin_to_media-backup.err.log
+-rw-r--r--   1 andrs  andrs    574 12 apr 10:39 last.home-bin_to_media-backup.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:39 last.home-dot-ssh_to_ipod.err.log
+-rw-r--r--   1 andrs  andrs    373 12 apr 10:39 last.home-dot-ssh_to_ipod.log
+-rw-r--r--   1 andrs  andrs      0 10 apr 19:16 last.home-dot-ssh_to_media-backup.err.log
+-rw-r--r--   1 andrs  andrs    373 12 apr 10:39 last.home-dot-ssh_to_media-backup.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:39 last.library-appsup_to_ipod.err.log
+-rw-r--r--   1 andrs  andrs   2226 12 apr 10:39 last.library-appsup_to_ipod.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:39 last.library-appsup_to_media-backup.err.log
+-rw-r--r--   1 andrs  andrs  22350 12 apr 10:40 last.library-appsup_to_media-backup.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:40 last.library-prefs_to_ipod.err.log
+-rw-r--r--   1 andrs  andrs   1719 12 apr 10:40 last.library-prefs_to_ipod.log
+-rw-r--r--   1 andrs  andrs      0 10 apr 19:39 last.library-prefs_to_media-backup.err.log
+-rw-r--r--   1 andrs  andrs  38138 12 apr 10:44 last.library-prefs_to_media-backup.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:44 last.sites_to_ipod.err.log
+-rw-r--r--   1 andrs  andrs    533 12 apr 10:44 last.sites_to_ipod.log
+-rw-r--r--   1 andrs  andrs      0 12 apr 10:44 last.sites_to_media-backup.err.log
+-rw-r--r--   1 andrs  andrs    532 12 apr 10:44 last.sites_to_media-backup.log
+</pre><p> The log files includes all files that were backuped up last run. If errors occured, read the <code class="filename">.err.log</code> files to debug what happend.</p></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="ar01s07.html">Prev</a>&nbsp;</td><td width="20%" align="center">&nbsp;</td><td width="40%" align="right">&nbsp;<a accesskey="n" href="ar01s09.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">7.&nbsp;Scheduling backup&nbsp;</td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top">&nbsp;9.&nbsp;Backup to remote destinations</td></tr></table></div></body></html>
